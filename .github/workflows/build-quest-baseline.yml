@@ -35,18 +35,26 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      # Do not ask setup-node to configure Yarn caching here. This repository
+      # pins Yarn 4 via packageManager, and setup-node's cache discovery can run
+      # before Corepack has activated that Yarn version on a fresh runner.
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable repository Yarn version
+      - name: Bootstrap repository Yarn 4
         shell: bash
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
         run: |
+          set -euo pipefail
           corepack enable
-          yarn --version
+          corepack prepare yarn@4.2.2 --activate
+          echo "Node: $(node --version)"
+          echo "Corepack: $(corepack --version)"
+          echo "Yarn: $(yarn --version)"
+          test "$(yarn --version)" = "4.2.2"
 
       - name: Install Java 17
         uses: actions/setup-java@v4
@@ -60,6 +68,7 @@ jobs:
       - name: Install Android API 34 and NDK 23.1
         shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager \
             'platform-tools' \
@@ -74,16 +83,21 @@ jobs:
 
       - name: Install JavaScript dependencies
         shell: bash
-        run: yarn install --immutable
+        run: |
+          set -euo pipefail
+          yarn install --immutable
 
       - name: Prepare upstream project for Quest CI
         shell: bash
-        run: python3 scripts/prepare-quest-ci-build.py
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-quest-ci-build.py
 
       - name: Build standalone ARM64 APK
         working-directory: android
         shell: bash
         run: |
+          set -euo pipefail
           chmod +x gradlew
           ./gradlew \
             assembleProdRelease \
