@@ -1,0 +1,112 @@
+name: Build Quest baseline APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - quest-v0-baseline
+    paths:
+      - '.github/workflows/build-quest-baseline.yml'
+      - 'scripts/prepare-quest-ci-build.py'
+      - 'android/**'
+      - 'src/**'
+      - 'index.js'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.yarnrc.yml'
+      - 'patches/**'
+      - 'nano-rs/**'
+      - 'third-party/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quest-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ARM64 sideload APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Enable repository Yarn version
+        shell: bash
+        run: |
+          corepack enable
+          yarn --version
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 34 and NDK 23.1
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            'platform-tools' \
+            'platforms;android-34' \
+            'build-tools;34.0.0' \
+            'ndk;23.1.7779620'
+
+      - name: Install Rust toolchain for Quest ARM64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: yarn install --immutable
+
+      - name: Prepare upstream project for Quest CI
+        shell: bash
+        run: python3 scripts/prepare-quest-ci-build.py
+
+      - name: Build standalone ARM64 APK
+        working-directory: android
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew \
+            assembleProdRelease \
+            -PreactNativeArchitectures=arm64-v8a \
+            --stacktrace \
+            --no-daemon
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
+          test -f "$APK"
+          mkdir -p out
+          cp "$APK" out/XStreaming-Quest-v0-baseline.apk
+          sha256sum out/XStreaming-Quest-v0-baseline.apk | tee out/SHA256SUMS.txt
+
+      - name: Upload Quest APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: XStreaming-Quest-v0-baseline
+          path: |
+            out/XStreaming-Quest-v0-baseline.apk
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
