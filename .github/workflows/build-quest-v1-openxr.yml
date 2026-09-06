@@ -150,11 +150,11 @@ jobs:
           grep -q '\[QuestXRBridgeCpu\]' android/app/src/main/java/com/oney/WebRTCModule/QuestXrStreamBridge.java
           grep -q '\[QuestXRBridge\]' android/app/src/main/cpp/quest_xr.cpp
 
-          if grep -RniE 'accessKey[[:space:]]*[:=][[:space:]]*["'"'][^"'"']+' \
+          if grep -RniE 'accessKey|access_token|refresh_token|Authorization:|ice-pwd|ice-ufrag|a=crypto:' \
                android/app/src/main/java/com/xstreaming/QuestOpenXrActivity.java \
                android/app/src/main/java/com/oney/WebRTCModule/QuestXrStreamBridge.java \
                android/app/src/main/cpp/quest_xr.cpp; then
-            echo 'Unexpected credential-like literal in V1 bridge source' >&2
+            echo 'Unexpected credential-related source reference in V1 bridge' >&2
             exit 1
           fi
 
