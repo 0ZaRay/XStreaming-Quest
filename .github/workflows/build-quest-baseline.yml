@@ -1,4 +1,4 @@
-name: Build Quest V0.5 APK
+name: Build Quest V0.6 APK
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - '.github/workflows/build-quest-baseline.yml'
       - 'scripts/prepare-quest-ci-build.py'
       - 'scripts/prepare-quest-v05.py'
+      - 'scripts/prepare-quest-v06.py'
       - 'android/**'
       - 'src/**'
       - 'index.js'
@@ -36,9 +37,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      # Do not ask setup-node to configure Yarn caching here. This repository
-      # pins Yarn 4 via packageManager, and setup-node's cache discovery can run
-      # before Corepack has activated that Yarn version on a fresh runner.
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -88,7 +86,15 @@ jobs:
           set -euo pipefail
           yarn install --immutable
 
-      - name: Verify Quest log redaction
+      - name: Prepare upstream project for Quest V0.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-quest-ci-build.py
+          python3 scripts/prepare-quest-v05.py
+          python3 scripts/prepare-quest-v06.py
+
+      - name: Verify Quest V0.6 security and patch invariants
         shell: bash
         run: |
           set -euo pipefail
@@ -100,14 +106,29 @@ jobs:
             access_token: 'secret-access-token',
             Authorization: 'Bearer secret-header-token',
             sessionId: 'secret-session-id',
+            accessKey: 'secret-xbox-access-key',
+            clientAppInstallId: 'secret-install-id',
             profile: {gamertag: 'private-gamertag'},
             diagnostic: 'kept',
           });
           assert.equal(nested.access_token, '[REDACTED]');
           assert.equal(nested.Authorization, '[REDACTED]');
           assert.equal(nested.sessionId, '[REDACTED]');
+          assert.equal(nested.accessKey, '[REDACTED]');
+          assert.equal(nested.clientAppInstallId, '[REDACTED]');
           assert.equal(nested.profile.gamertag, '[REDACTED]');
           assert.equal(nested.diagnostic, 'kept');
+
+          const xboxChannel = redactLogValue(
+            JSON.stringify({
+              message: 'authorizationRequest',
+              accessKey: 'secret-xbox-access-key',
+              diagnostic: 'kept',
+            }),
+          );
+          assert.equal(xboxChannel.includes('secret-xbox-access-key'), false);
+          assert.equal(xboxChannel.includes('[REDACTED]'), true);
+          assert.equal(xboxChannel.includes('diagnostic'), true);
 
           const serialized = redactLogValue(
             JSON.stringify({sdp: 'a=ice-pwd:secret', ok: true}),
@@ -115,19 +136,24 @@ jobs:
           assert.equal(serialized.includes('secret'), false);
           assert.equal(serialized.includes('[REDACTED]'), true);
 
+          const flattened = redactLogValue(
+            "authorizationRequest accessKey='secret-flat-access-key' status=ok",
+          );
+          assert.equal(flattened.includes('secret-flat-access-key'), false);
+          assert.equal(flattened.includes('[REDACTED]'), true);
+
           const bearer = redactLogValue('Authorization: Bearer abc.def.ghi');
           assert.equal(bearer.includes('abc.def.ghi'), false);
           assert.equal(bearer.includes('[REDACTED]'), true);
 
-          console.log('Quest log-redaction checks passed.');
+          console.log('Quest V0.6 log-redaction checks passed.');
           NODE
 
-      - name: Prepare upstream project for Quest CI
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/prepare-quest-ci-build.py
-          python3 scripts/prepare-quest-v05.py
+          grep -q "restartApp" android/app/src/main/java/com/xstreaming/AudioSettingModule.java
+          grep -q "setEnabledSync" android/app/src/main/java/com/xstreaming/LowLatencyDecoderConfig.java
+          grep -q "\[QuestPerf\]" src/webrtc/index.ts
+          grep -q "Restart XStreaming to apply" src/components/QuestQuickSettingsPanel.tsx
+          echo 'Quest V0.6 patch-invariant checks passed.'
 
       - name: Build standalone ARM64 APK
         working-directory: android
@@ -148,15 +174,15 @@ jobs:
           APK='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
           test -f "$APK"
           mkdir -p out
-          cp "$APK" out/XStreaming-Quest-v0.5.apk
-          sha256sum out/XStreaming-Quest-v0.5.apk | tee out/SHA256SUMS.txt
+          cp "$APK" out/XStreaming-Quest-v0.6.apk
+          sha256sum out/XStreaming-Quest-v0.6.apk | tee out/SHA256SUMS.txt
 
       - name: Upload Quest APK
         uses: actions/upload-artifact@v4
         with:
-          name: XStreaming-Quest-v0.5
+          name: XStreaming-Quest-v0.6
           path: |
-            out/XStreaming-Quest-v0.5.apk
+            out/XStreaming-Quest-v0.6.apk
             out/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
