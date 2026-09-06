@@ -18,6 +18,7 @@ target_compile_definitions(
     PRIVATE
     XR_USE_PLATFORM_ANDROID=1
     XR_USE_GRAPHICS_API_OPENGL_ES=1
+    EGL_OPENGL_ES3_BIT_KHR=0x0040
 )
 
 target_compile_options(
@@ -26,6 +27,8 @@ target_compile_options(
     -Wall
     -Wextra
     -Wno-unused-parameter
+    -include
+    cstdio
 )
 
 target_link_libraries(
