@@ -1,0 +1,215 @@
+name: Build Quest V1 OpenXR APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - quest-v1-openxr
+    paths:
+      - '.github/workflows/build-quest-v1-openxr.yml'
+      - 'scripts/prepare-quest-ci-build.py'
+      - 'scripts/prepare-quest-v05.py'
+      - 'scripts/prepare-quest-v06.py'
+      - 'scripts/prepare-quest-v1.py'
+      - 'android/**'
+      - 'src/**'
+      - 'index.js'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.yarnrc.yml'
+      - 'patches/**'
+      - 'nano-rs/**'
+      - 'third-party/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quest-v1-openxr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ARM64 OpenXR sideload APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bootstrap repository Yarn 4
+        shell: bash
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare yarn@4.2.2 --activate
+          echo "Node: $(node --version)"
+          echo "Corepack: $(corepack --version)"
+          echo "Yarn: $(yarn --version)"
+          test "$(yarn --version)" = "4.2.2"
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 34, NDK 23.1 and CMake 3.22
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            'platform-tools' \
+            'platforms;android-34' \
+            'build-tools;34.0.0' \
+            'ndk;23.1.7779620' \
+            'cmake;3.22.1'
+
+      - name: Install Rust toolchain for Quest ARM64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          yarn install --immutable
+
+      - name: Prepare upstream project for Quest V1 OpenXR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-quest-ci-build.py
+          python3 scripts/prepare-quest-v05.py
+          python3 scripts/prepare-quest-v06.py
+          python3 scripts/prepare-quest-v1.py
+
+      - name: Verify Quest V1 security and patch invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const {redactLogValue} = require('./src/utils/safeConsole');
+          const assert = require('node:assert/strict');
+
+          const nested = redactLogValue({
+            access_token: 'secret-access-token',
+            Authorization: 'Bearer secret-header-token',
+            sessionId: 'secret-session-id',
+            accessKey: 'secret-xbox-access-key',
+            clientAppInstallId: 'secret-install-id',
+            profile: {gamertag: 'private-gamertag'},
+            diagnostic: 'kept',
+          });
+          assert.equal(nested.access_token, '[REDACTED]');
+          assert.equal(nested.Authorization, '[REDACTED]');
+          assert.equal(nested.sessionId, '[REDACTED]');
+          assert.equal(nested.accessKey, '[REDACTED]');
+          assert.equal(nested.clientAppInstallId, '[REDACTED]');
+          assert.equal(nested.profile.gamertag, '[REDACTED]');
+          assert.equal(nested.diagnostic, 'kept');
+
+          const flattened = redactLogValue(
+            "authorizationRequest accessKey='secret-flat-access-key' status=ok",
+          );
+          assert.equal(flattened.includes('secret-flat-access-key'), false);
+          assert.equal(flattened.includes('[REDACTED]'), true);
+
+          const serialized = redactLogValue(
+            JSON.stringify({sdp: 'a=ice-pwd:secret', ok: true}),
+          );
+          assert.equal(serialized.includes('secret'), false);
+
+          console.log('Quest V1 log-redaction checks passed.');
+          NODE
+
+          grep -q 'QuestOpenXrActivity' android/app/src/main/AndroidManifest.xml
+          grep -q 'com.oculus.intent.category.VR' android/app/src/main/AndroidManifest.xml
+          grep -q 'quest2|questpro|quest3|quest3s' android/app/src/main/AndroidManifest.xml
+          grep -q 'openxr_loader_for_android:1.1.63' android/app/build.gradle
+          grep -q 'prefab true' android/app/build.gradle
+          grep -q 'src/main/cpp/CMakeLists.txt' android/app/build.gradle
+          grep -q 'launchSpatial' android/app/src/main/java/com/xstreaming/AudioSettingModule.java
+          grep -q 'Enter Spatial V1' src/components/QuestQuickSettingsPanel.tsx
+          grep -q "streamURL={remote || ''}" src/pages/NativeStream.tsx
+          grep -q '\[QuestPerf\]' src/webrtc/index.ts
+          grep -q '\[QuestXRBridgeCpu\]' android/app/src/main/java/com/oney/WebRTCModule/QuestXrStreamBridge.java
+          grep -q '\[QuestXRBridge\]' android/app/src/main/cpp/quest_xr.cpp
+
+          if grep -RniE 'accessKey[[:space:]]*[:=][[:space:]]*["'"'][^"'"']+' \
+               android/app/src/main/java/com/xstreaming/QuestOpenXrActivity.java \
+               android/app/src/main/java/com/oney/WebRTCModule/QuestXrStreamBridge.java \
+               android/app/src/main/cpp/quest_xr.cpp; then
+            echo 'Unexpected credential-like literal in V1 bridge source' >&2
+            exit 1
+          fi
+
+          echo 'Quest V1 OpenXR invariant checks passed.'
+
+      - name: Build standalone ARM64 OpenXR APK
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew \
+            assembleProdRelease \
+            -PreactNativeArchitectures=arm64-v8a \
+            --stacktrace \
+            --no-daemon
+
+      - name: Verify native OpenXR libraries and collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
+          test -f "$APK"
+
+          python3 - <<'PY'
+          import zipfile
+          apk = 'android/app/build/outputs/apk/prod/release/app-prod-release.apk'
+          with zipfile.ZipFile(apk) as zf:
+              names = set(zf.namelist())
+          required = {
+              'lib/arm64-v8a/libxstreaming_xr.so',
+              'lib/arm64-v8a/libopenxr_loader.so',
+          }
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f'Missing required OpenXR native libraries: {missing}')
+          wrong_abis = sorted(
+              name for name in names
+              if name.startswith('lib/') and '/lib' in name and not name.startswith('lib/arm64-v8a/')
+          )
+          if wrong_abis:
+              raise SystemExit(f'Unexpected non-arm64 native libraries: {wrong_abis[:10]}')
+          print('OpenXR native-library verification passed.')
+          PY
+
+          mkdir -p out
+          cp "$APK" out/XStreaming-Quest-v1-openxr.apk
+          sha256sum out/XStreaming-Quest-v1-openxr.apk | tee out/SHA256SUMS.txt
+
+      - name: Upload Quest V1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: XStreaming-Quest-v1-openxr
+          path: |
+            out/XStreaming-Quest-v1-openxr.apk
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
