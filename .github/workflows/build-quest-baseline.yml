@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/build-quest-baseline.yml'
       - 'scripts/prepare-quest-ci-build.py'
+      - 'scripts/prepare-quest-v05.py'
       - 'android/**'
       - 'src/**'
       - 'index.js'
@@ -92,6 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/prepare-quest-ci-build.py
+          python3 scripts/prepare-quest-v05.py
 
       - name: Build standalone ARM64 APK
         working-directory: android
