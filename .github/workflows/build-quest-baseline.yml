@@ -1,4 +1,4 @@
-name: Build Quest baseline APK
+name: Build Quest V0.5 APK
 
 on:
   workflow_dispatch:
@@ -88,6 +88,40 @@ jobs:
           set -euo pipefail
           yarn install --immutable
 
+      - name: Verify Quest log redaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const {redactLogValue} = require('./src/utils/safeConsole');
+          const assert = require('node:assert/strict');
+
+          const nested = redactLogValue({
+            access_token: 'secret-access-token',
+            Authorization: 'Bearer secret-header-token',
+            sessionId: 'secret-session-id',
+            profile: {gamertag: 'private-gamertag'},
+            diagnostic: 'kept',
+          });
+          assert.equal(nested.access_token, '[REDACTED]');
+          assert.equal(nested.Authorization, '[REDACTED]');
+          assert.equal(nested.sessionId, '[REDACTED]');
+          assert.equal(nested.profile.gamertag, '[REDACTED]');
+          assert.equal(nested.diagnostic, 'kept');
+
+          const serialized = redactLogValue(
+            JSON.stringify({sdp: 'a=ice-pwd:secret', ok: true}),
+          );
+          assert.equal(serialized.includes('secret'), false);
+          assert.equal(serialized.includes('[REDACTED]'), true);
+
+          const bearer = redactLogValue('Authorization: Bearer abc.def.ghi');
+          assert.equal(bearer.includes('abc.def.ghi'), false);
+          assert.equal(bearer.includes('[REDACTED]'), true);
+
+          console.log('Quest log-redaction checks passed.');
+          NODE
+
       - name: Prepare upstream project for Quest CI
         shell: bash
         run: |
@@ -114,15 +148,15 @@ jobs:
           APK='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
           test -f "$APK"
           mkdir -p out
-          cp "$APK" out/XStreaming-Quest-v0-baseline.apk
-          sha256sum out/XStreaming-Quest-v0-baseline.apk | tee out/SHA256SUMS.txt
+          cp "$APK" out/XStreaming-Quest-v0.5.apk
+          sha256sum out/XStreaming-Quest-v0.5.apk | tee out/SHA256SUMS.txt
 
       - name: Upload Quest APK
         uses: actions/upload-artifact@v4
         with:
-          name: XStreaming-Quest-v0-baseline
+          name: XStreaming-Quest-v0.5
           path: |
-            out/XStreaming-Quest-v0-baseline.apk
+            out/XStreaming-Quest-v0.5.apk
             out/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
